@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from pyproj import Transformer
+from shapely import transform as shapely_transform
 from shapely.affinity import translate
 from shapely.geometry import (
     GeometryCollection,
@@ -19,7 +20,7 @@ from shapely.geometry import (
     shape,
 )
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import split, transform, unary_union
+from shapely.ops import split, unary_union
 from shapely.validation import explain_validity, make_valid
 
 GEOGRAPHIC_CRS = "EPSG:4326"
@@ -213,7 +214,9 @@ def build_search_area(
     to_polar = Transformer.from_crs(GEOGRAPHIC_CRS, BUFFER_CRS, always_xy=True)
     to_geographic = Transformer.from_crs(BUFFER_CRS, GEOGRAPHIC_CRS, always_xy=True)
 
-    source_projected = transform(to_polar.transform, source_geographic)
+    source_projected = shapely_transform(
+        source_geographic, to_polar.transform, interleaved=False
+    )
     if not source_projected.is_valid:
         source_projected = make_valid(source_projected)
     source_projected_parts = _polygon_parts(source_projected)
@@ -223,8 +226,8 @@ def build_search_area(
     projected_source = unary_union(source_projected_parts)
     source_area_km2 = projected_source.area / 1_000_000.0
     buffered_projected = projected_source.buffer(buffer_m)
-    buffered_geographic_unwrapped = transform(
-        to_geographic.transform, buffered_projected
+    buffered_geographic_unwrapped = shapely_transform(
+        buffered_projected, to_geographic.transform, interleaved=False
     )
 
     # Inverse projection reintroduces the antimeridian discontinuity; unwrap before splitting.

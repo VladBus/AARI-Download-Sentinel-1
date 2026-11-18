@@ -1,0 +1,1 @@
+"""CDSE product-catalogue clients."""
