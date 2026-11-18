@@ -224,3 +224,10 @@ __marimo__/
 
 # VS Code workspace settings are local to each developer
 .vscode/
+
+# Local secrets, workspace data, and runtime output
+.env.*
+!.env.example
+data/
+logs/
+*.log
