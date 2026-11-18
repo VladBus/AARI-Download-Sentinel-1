@@ -52,7 +52,7 @@ class S3ClientTests(unittest.TestCase):
         result = client.check_access()
         fake_client.list_objects_v2.assert_called_once_with(
             Bucket="eodata",
-            Prefix="Sentinel-1/SAR/GRD/",
+            Prefix="Sentinel-1/SAR/EW_GRDM_1S/",
             MaxKeys=1,
         )
         self.assertEqual(result.visible_objects, 1)

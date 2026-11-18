@@ -19,6 +19,7 @@ class Settings:
     cdse_s3_endpoint_url: str
     cdse_s3_bucket: str
     cdse_s3_region_name: str
+    cdse_s3_check_prefix: str
     cdse_odata_url: str
     cdse_credentials_expires_at: str
     region_geojson: Path
@@ -76,6 +77,9 @@ def load_settings(project_root: str | Path | None = None) -> Settings:
         ).rstrip("/"),
         cdse_s3_bucket=env("CDSE_S3_BUCKET", "eodata"),
         cdse_s3_region_name=env("CDSE_S3_REGION_NAME", "default"),
+        cdse_s3_check_prefix=env(
+            "CDSE_S3_CHECK_PREFIX", "Sentinel-1/SAR/EW_GRDM_1S/"
+        ).lstrip("/"),
         cdse_odata_url=env(
             "CDSE_ODATA_URL", "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
         ).rstrip("/"),

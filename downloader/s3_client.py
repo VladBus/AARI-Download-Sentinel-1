@@ -33,6 +33,7 @@ class CDSES3Client:
         settings.require_s3_credentials()
         self.bucket_name = settings.cdse_s3_bucket
         self.endpoint_url = settings.cdse_s3_endpoint_url
+        self.check_prefix = settings.cdse_s3_check_prefix
         self.client = client or boto3.client(
             "s3",
             endpoint_url=self.endpoint_url,
@@ -48,13 +49,14 @@ class CDSES3Client:
         )
 
     def check_access(
-        self, prefix: str = "Sentinel-1/SAR/GRD/"
+        self, prefix: str | None = None
     ) -> S3CheckResult:
         """Issue a lightweight ListObjectsV2 request; no EO data is downloaded."""
+        checked_prefix = (prefix or self.check_prefix).lstrip("/")
         try:
             response = self.client.list_objects_v2(
                 Bucket=self.bucket_name,
-                Prefix=prefix,
+                Prefix=checked_prefix,
                 MaxKeys=1,
             )
         except ClientError as exc:
@@ -74,7 +76,7 @@ class CDSES3Client:
         return S3CheckResult(
             endpoint_url=self.endpoint_url,
             bucket=self.bucket_name,
-            checked_prefix=prefix,
+            checked_prefix=checked_prefix,
             visible_objects=len(objects),
             sample_key=sample_key,
         )
