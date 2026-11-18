@@ -46,7 +46,7 @@ class S3ClientTests(unittest.TestCase):
         )
         fake_client = Mock()
         fake_client.list_objects_v2.return_value = {
-            "Contents": [{"Key": "Sentinel-1/SAR/GRD/example/manifest.safe"}]
+            "Contents": [{"Key": "Sentinel-1/SAR/EW_GRDM_1S/2026/11/10/example/manifest.safe"}]
         }
         client = CDSES3Client(settings, client=fake_client)
         result = client.check_access()
@@ -56,6 +56,15 @@ class S3ClientTests(unittest.TestCase):
             MaxKeys=1,
         )
         self.assertEqual(result.visible_objects, 1)
+        self.assertEqual(result.checked_prefix, "Sentinel-1/SAR/EW_GRDM_1S/")
+
+
+    def test_default_check_prefix_matches_odata_product_storage_path(self) -> None:
+        settings = load_settings()
+        self.assertEqual(
+            settings.cdse_s3_check_prefix,
+            "Sentinel-1/SAR/EW_GRDM_1S/",
+        )
 
 
 if __name__ == "__main__":
