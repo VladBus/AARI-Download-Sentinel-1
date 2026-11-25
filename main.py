@@ -36,7 +36,17 @@ def build_parser() -> argparse.ArgumentParser:
     actions.add_argument(
         "--check-s3-product",
         action="store_true",
-        help="Проверить объекты внутри SAFE-префикса конкретного продукта из JSON-отчёта.",
+        help="Проверить первые объекты внутри SAFE-префикса продукта.",
+    )
+    actions.add_argument(
+        "--plan-s3-download",
+        action="store_true",
+        help="Посчитать число объектов и общий объём выбранного SAFE-продукта без скачивания.",
+    )
+    actions.add_argument(
+        "--download-product",
+        action="store_true",
+        help="Скачать один полный SAFE-продукт, выбранный из JSON-отчёта.",
     )
     actions.add_argument(
         "--search-s1",
@@ -77,7 +87,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--s3-max-keys",
         type=int,
         default=5,
-        help="Максимум объектов для проверки SAFE-префикса (по умолчанию 5).",
+        help="Максимум объектов для быстрой проверки SAFE-префикса (по умолчанию 5).",
+    )
+    parser.add_argument(
+        "--download-dir",
+        type=Path,
+        help="Каталог для SAFE-продукта (по умолчанию S1_DOWNLOAD_DIR из .env).",
     )
     return parser
 
@@ -203,6 +218,76 @@ def _run_search(args: argparse.Namespace, settings: Any) -> int:
     return 0
 
 
+def _run_product_inventory(args: argparse.Namespace, settings: Any) -> int:
+    if args.search_report is None:
+        raise ValueError("--plan-s3-download требует --search-report.")
+    product = _load_product_from_report(args.search_report, args.product_index)
+    product_name = product.get("name")
+    if not product_name:
+        raise ValueError("В выбранной записи JSON отсутствует имя продукта.")
+
+    result = CDSES3Client(settings).inspect_product(product["s3_path"])
+    print(
+        json.dumps(
+            {
+                "status": "PRODUCT_INVENTORY_READY",
+                "product_name": product_name,
+                "product_id": product.get("product_id"),
+                "endpoint": result.endpoint_url,
+                "bucket": result.bucket,
+                "product_prefix": result.product_prefix,
+                "objects_total": result.object_count,
+                "total_size_bytes": result.total_size_bytes,
+                "total_size_mib": round(result.total_size_bytes / (1024**2), 2),
+                "total_size_gib": round(result.total_size_bytes / (1024**3), 3),
+                "sample_objects": result.sample_objects,
+                "downloaded_data": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _run_product_download(args: argparse.Namespace, settings: Any) -> int:
+    if args.search_report is None:
+        raise ValueError("--download-product требует --search-report.")
+    product = _load_product_from_report(args.search_report, args.product_index)
+    product_name = product.get("name")
+    if not product_name:
+        raise ValueError("В выбранной записи JSON отсутствует имя продукта.")
+
+    destination_dir = args.download_dir or settings.download_dir
+    result = CDSES3Client(settings).download_product(
+        s3_path=product["s3_path"],
+        product_name=product_name,
+        destination_dir=destination_dir,
+    )
+    print(
+        json.dumps(
+            {
+                "status": "PRODUCT_DOWNLOADED",
+                "product_name": result.product_name,
+                "product_id": product.get("product_id"),
+                "endpoint": result.endpoint_url,
+                "bucket": result.bucket,
+                "product_prefix": result.product_prefix,
+                "local_path": result.local_path,
+                "objects_total": result.objects_total,
+                "objects_downloaded": result.objects_downloaded,
+                "objects_skipped": result.objects_skipped,
+                "total_size_bytes": result.total_size_bytes,
+                "downloaded_size_bytes": result.downloaded_size_bytes,
+                "skipped_size_bytes": result.skipped_size_bytes,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -267,6 +352,12 @@ def main() -> int:
                 )
             )
             return 0 if has_objects else 4
+
+        if args.plan_s3_download:
+            return _run_product_inventory(args, settings)
+
+        if args.download_product:
+            return _run_product_download(args, settings)
 
         if args.search_s1:
             return _run_search(args, settings)

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
 import boto3
+from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+from tqdm import tqdm
 
 from config import Settings
 
@@ -38,6 +41,41 @@ class S3ProductCheckResult:
     sample_objects: list[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class S3ProductInventoryResult:
+    """Complete object inventory for one SAFE product."""
+
+    endpoint_url: str
+    bucket: str
+    product_prefix: str
+    object_count: int
+    total_size_bytes: int
+    sample_objects: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class S3ProductDownloadResult:
+    """Summary of a completed or resumed SAFE product download."""
+
+    endpoint_url: str
+    bucket: str
+    product_prefix: str
+    product_name: str
+    local_path: str
+    objects_total: int
+    objects_downloaded: int
+    objects_skipped: int
+    total_size_bytes: int
+    downloaded_size_bytes: int
+    skipped_size_bytes: int
+
+
+@dataclass(frozen=True)
+class _S3Object:
+    key: str
+    size_bytes: int
+
+
 class CDSES3Client:
     """Create an authenticated boto3 S3 client using local .env settings."""
 
@@ -56,13 +94,12 @@ class CDSES3Client:
                 signature_version="s3v4",
                 connect_timeout=20,
                 read_timeout=60,
+                max_pool_connections=10,
                 retries={"max_attempts": 5, "mode": "standard"},
             ),
         )
 
-    def _list_objects(
-        self, prefix: str, max_keys: int
-    ) -> dict[str, Any]:
+    def _list_objects(self, prefix: str, max_keys: int) -> dict[str, Any]:
         try:
             return self.client.list_objects_v2(
                 Bucket=self.bucket_name,
@@ -103,9 +140,7 @@ class CDSES3Client:
         if max_keys < 1 or max_keys > 1000:
             raise ValueError("max_keys должен находиться в диапазоне 1–1000.")
 
-        product_prefix = self.normalize_s3_path(
-            s3_path, bucket_name=self.bucket_name
-        ).rstrip("/") + "/"
+        product_prefix = self._product_prefix(s3_path)
         response = self._list_objects(product_prefix, max_keys=max_keys)
 
         sample_objects = [
@@ -124,6 +159,229 @@ class CDSES3Client:
             is_truncated=bool(response.get("IsTruncated", False)),
             sample_objects=sample_objects,
         )
+
+    def inspect_product(self, s3_path: str, sample_limit: int = 10) -> S3ProductInventoryResult:
+        """List every object in one SAFE prefix and calculate its total size."""
+        if sample_limit < 1 or sample_limit > 100:
+            raise ValueError("sample_limit должен находиться в диапазоне 1–100.")
+
+        product_prefix = self._product_prefix(s3_path)
+        objects = self._list_product_objects(product_prefix)
+        return S3ProductInventoryResult(
+            endpoint_url=self.endpoint_url,
+            bucket=self.bucket_name,
+            product_prefix=product_prefix,
+            object_count=len(objects),
+            total_size_bytes=sum(item.size_bytes for item in objects),
+            sample_objects=[
+                {"key": item.key, "size_bytes": item.size_bytes}
+                for item in objects[:sample_limit]
+            ],
+        )
+
+    def download_product(
+        self,
+        s3_path: str,
+        product_name: str,
+        destination_dir: str | Path,
+    ) -> S3ProductDownloadResult:
+        """Download all objects in one SAFE prefix, resuming at completed-file level.
+
+        Existing files are skipped only when their local size matches the S3 object size.
+        A file interrupted during transfer is downloaded again on the next run.
+        """
+        self._validate_product_name(product_name)
+        product_prefix = self._product_prefix(s3_path)
+        objects = self._list_product_objects(product_prefix)
+        if not objects:
+            raise FileNotFoundError(
+                f"В CDSE S3 не найдено объектов для продукта {product_name}."
+            )
+
+        output_root = Path(destination_dir).expanduser().resolve()
+        product_root = (output_root / product_name).resolve()
+        planned_files: list[tuple[_S3Object, Path]] = []
+
+        # Validate every object key before creating or writing any local files.
+        for item in objects:
+            relative_path = self._safe_relative_path(item.key, product_prefix)
+            local_path = (product_root / relative_path).resolve()
+            if not local_path.is_relative_to(product_root):
+                raise ValueError(
+                    f"Недопустимый путь объекта S3: {item.key!r}."
+                )
+            planned_files.append((item, local_path))
+
+        product_root.mkdir(parents=True, exist_ok=True)
+        total_size = sum(item.size_bytes for item in objects)
+        downloaded_count = 0
+        skipped_count = 0
+        downloaded_size = 0
+        skipped_size = 0
+        transfer_config = TransferConfig(
+            multipart_threshold=64 * 1024 * 1024,
+            multipart_chunksize=64 * 1024 * 1024,
+            max_concurrency=4,
+            use_threads=True,
+        )
+
+        with tqdm(
+            total=total_size,
+            unit="B",
+            unit_scale=True,
+            desc=product_name,
+            dynamic_ncols=True,
+        ) as progress:
+            for item, local_path in planned_files:
+                if local_path.is_file() and local_path.stat().st_size == item.size_bytes:
+                    skipped_count += 1
+                    skipped_size += item.size_bytes
+                    progress.update(item.size_bytes)
+                    continue
+
+                if local_path.exists() and not local_path.is_file():
+                    raise S3ConnectionError(
+                        f"По пути файла уже существует каталог: {local_path}"
+                    )
+
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    self.client.download_file(
+                        self.bucket_name,
+                        item.key,
+                        str(local_path),
+                        Config=transfer_config,
+                        Callback=progress.update,
+                    )
+                except Exception as exc:
+                    raise S3ConnectionError(
+                        f"Не удалось скачать объект {item.key}: {exc}"
+                    ) from exc
+
+                if not local_path.is_file():
+                    raise S3ConnectionError(
+                        f"После загрузки файл не найден: {local_path}"
+                    )
+                actual_size = local_path.stat().st_size
+                if actual_size != item.size_bytes:
+                    raise S3ConnectionError(
+                        "Размер скачанного объекта не совпадает с размером в S3: "
+                        f"{item.key}; ожидалось {item.size_bytes} байт, "
+                        f"получено {actual_size} байт."
+                    )
+
+                downloaded_count += 1
+                downloaded_size += item.size_bytes
+
+        return S3ProductDownloadResult(
+            endpoint_url=self.endpoint_url,
+            bucket=self.bucket_name,
+            product_prefix=product_prefix,
+            product_name=product_name,
+            local_path=str(product_root),
+            objects_total=len(objects),
+            objects_downloaded=downloaded_count,
+            objects_skipped=skipped_count,
+            total_size_bytes=total_size,
+            downloaded_size_bytes=downloaded_size,
+            skipped_size_bytes=skipped_size,
+        )
+
+    def _list_product_objects(self, product_prefix: str) -> list[_S3Object]:
+        """Read all object pages under a product prefix."""
+        objects: list[_S3Object] = []
+        continuation_token: str | None = None
+
+        while True:
+            request: dict[str, Any] = {
+                "Bucket": self.bucket_name,
+                "Prefix": product_prefix,
+                "MaxKeys": 1000,
+            }
+            if continuation_token:
+                request["ContinuationToken"] = continuation_token
+
+            try:
+                response = self.client.list_objects_v2(**request)
+            except ClientError as exc:
+                error = exc.response.get("Error", {})
+                code = error.get("Code", "Unknown")
+                message = error.get("Message", "No additional details")
+                raise S3ConnectionError(
+                    f"CDSE S3 отклонил запрос ({code}): {message}"
+                ) from exc
+            except BotoCoreError as exc:
+                raise S3ConnectionError(
+                    f"Не удалось получить список объектов CDSE S3: {exc}"
+                ) from exc
+
+            for item in response.get("Contents") or []:
+                key = str(item.get("Key") or "")
+                if not key.startswith(product_prefix):
+                    raise S3ConnectionError(
+                        f"CDSE S3 вернул объект вне запрошенного префикса: {key!r}."
+                    )
+                if key.endswith("/"):
+                    continue
+                size_bytes = int(item.get("Size") or 0)
+                if size_bytes < 0:
+                    raise S3ConnectionError(
+                        f"CDSE S3 вернул отрицательный размер объекта: {key!r}."
+                    )
+                objects.append(_S3Object(key=key, size_bytes=size_bytes))
+
+            if not response.get("IsTruncated", False):
+                break
+
+            next_token = response.get("NextContinuationToken")
+            if not next_token or next_token == continuation_token:
+                raise S3ConnectionError(
+                    "CDSE S3 сообщил о следующей странице, но не вернул новый "
+                    "ContinuationToken."
+                )
+            continuation_token = str(next_token)
+
+        return sorted(objects, key=lambda item: item.key)
+
+    def _product_prefix(self, s3_path: str) -> str:
+        return self.normalize_s3_path(
+            s3_path, bucket_name=self.bucket_name
+        ).rstrip("/") + "/"
+
+    @staticmethod
+    def _validate_product_name(product_name: str) -> None:
+        invalid_characters = '<>:"|?*'
+        if (
+            not product_name
+            or product_name != PurePosixPath(product_name).name
+            or "/" in product_name
+            or "\\" in product_name
+            or any(char in product_name for char in invalid_characters)
+            or not product_name.endswith(".SAFE")
+        ):
+            raise ValueError(
+                f"Недопустимое имя SAFE-продукта для локального каталога: "
+                f"{product_name!r}."
+            )
+
+    @staticmethod
+    def _safe_relative_path(key: str, prefix: str) -> Path:
+        relative = key[len(prefix):]
+        parts = relative.split("/")
+        invalid_characters = '<>:"|?*'
+        if (
+            not relative
+            or relative.startswith("/")
+            or "\\" in relative
+            or any(part in {"", ".", ".."} for part in parts)
+            or any(
+                any(char in part for char in invalid_characters)
+                or part.endswith((" ", "."))
+                for part in parts
+            )
+        ):
+            raise ValueError(f"Недопустимый относительный путь объекта S3: {key!r}.")
+        return Path(*parts)
 
     @staticmethod
     def normalize_s3_path(s3_path: str, bucket_name: str = "eodata") -> str:
