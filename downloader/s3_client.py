@@ -26,6 +26,18 @@ class S3CheckResult:
     sample_key: str | None
 
 
+@dataclass(frozen=True)
+class S3ProductCheckResult:
+    """A small listing from the exact S3 prefix of one OData product."""
+
+    endpoint_url: str
+    bucket: str
+    product_prefix: str
+    objects_returned: int
+    is_truncated: bool
+    sample_objects: list[dict[str, Any]]
+
+
 class CDSES3Client:
     """Create an authenticated boto3 S3 client using local .env settings."""
 
@@ -48,16 +60,14 @@ class CDSES3Client:
             ),
         )
 
-    def check_access(
-        self, prefix: str | None = None
-    ) -> S3CheckResult:
-        """Issue a lightweight ListObjectsV2 request; no EO data is downloaded."""
-        checked_prefix = (prefix or self.check_prefix).lstrip("/")
+    def _list_objects(
+        self, prefix: str, max_keys: int
+    ) -> dict[str, Any]:
         try:
-            response = self.client.list_objects_v2(
+            return self.client.list_objects_v2(
                 Bucket=self.bucket_name,
-                Prefix=checked_prefix,
-                MaxKeys=1,
+                Prefix=prefix,
+                MaxKeys=max_keys,
             )
         except ClientError as exc:
             error = exc.response.get("Error", {})
@@ -71,6 +81,11 @@ class CDSES3Client:
                 f"Не удалось выполнить запрос к CDSE S3: {exc}"
             ) from exc
 
+    def check_access(self, prefix: str | None = None) -> S3CheckResult:
+        """Check a catalogue prefix. A valid empty response is not a data-access error."""
+        checked_prefix = (prefix or self.check_prefix).lstrip("/")
+        response = self._list_objects(checked_prefix, max_keys=1)
+
         objects = response.get("Contents") or []
         sample_key = objects[0].get("Key") if objects else None
         return S3CheckResult(
@@ -79,6 +94,35 @@ class CDSES3Client:
             checked_prefix=checked_prefix,
             visible_objects=len(objects),
             sample_key=sample_key,
+        )
+
+    def check_product_prefix(
+        self, s3_path: str, max_keys: int = 5
+    ) -> S3ProductCheckResult:
+        """List up to max_keys objects under the exact SAFE product prefix."""
+        if max_keys < 1 or max_keys > 1000:
+            raise ValueError("max_keys должен находиться в диапазоне 1–1000.")
+
+        product_prefix = self.normalize_s3_path(
+            s3_path, bucket_name=self.bucket_name
+        ).rstrip("/") + "/"
+        response = self._list_objects(product_prefix, max_keys=max_keys)
+
+        sample_objects = [
+            {
+                "key": str(item.get("Key") or ""),
+                "size_bytes": int(item.get("Size") or 0),
+                "storage_class": item.get("StorageClass"),
+            }
+            for item in response.get("Contents", [])
+        ]
+        return S3ProductCheckResult(
+            endpoint_url=self.endpoint_url,
+            bucket=self.bucket_name,
+            product_prefix=product_prefix,
+            objects_returned=len(sample_objects),
+            is_truncated=bool(response.get("IsTruncated", False)),
+            sample_objects=sample_objects,
         )
 
     @staticmethod

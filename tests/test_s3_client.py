@@ -58,13 +58,44 @@ class S3ClientTests(unittest.TestCase):
         self.assertEqual(result.visible_objects, 1)
         self.assertEqual(result.checked_prefix, "Sentinel-1/SAR/EW_GRDM_1S/")
 
-
     def test_default_check_prefix_matches_odata_product_storage_path(self) -> None:
         settings = load_settings()
         self.assertEqual(
             settings.cdse_s3_check_prefix,
             "Sentinel-1/SAR/EW_GRDM_1S/",
         )
+
+    def test_product_prefix_is_exact_and_has_trailing_slash(self) -> None:
+        settings = load_settings()
+        settings = settings.__class__(
+            **{
+                **settings.__dict__,
+                "cdse_access_key": "test-access",
+                "cdse_secret_key": "test-secret",
+            }
+        )
+        fake_client = Mock()
+        fake_client.list_objects_v2.return_value = {
+            "Contents": [
+                {
+                    "Key": "Sentinel-1/SAR/EW_GRDM_1S/2026/11/24/example.SAFE/manifest.safe",
+                    "Size": 12345,
+                    "StorageClass": "STANDARD",
+                }
+            ],
+            "IsTruncated": False,
+        }
+        result = CDSES3Client(settings, client=fake_client).check_product_prefix(
+            "/eodata/Sentinel-1/SAR/EW_GRDM_1S/2026/11/24/example.SAFE"
+        )
+        fake_client.list_objects_v2.assert_called_once_with(
+            Bucket="eodata",
+            Prefix="Sentinel-1/SAR/EW_GRDM_1S/2026/11/24/example.SAFE/",
+            MaxKeys=5,
+        )
+        self.assertEqual(result.objects_returned, 1)
+        self.assertEqual(result.sample_objects[0]["size_bytes"], 12345)
+        self.assertFalse(result.is_truncated)
 
 
 if __name__ == "__main__":

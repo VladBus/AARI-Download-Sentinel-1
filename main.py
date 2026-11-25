@@ -8,6 +8,7 @@ import logging
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -30,7 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
     actions.add_argument(
         "--check-s3",
         action="store_true",
-        help="Проверить авторизацию и доступность CDSE S3 без скачивания данных.",
+        help="Проверить запрос к CDSE S3 по каталожному префиксу.",
+    )
+    actions.add_argument(
+        "--check-s3-product",
+        action="store_true",
+        help="Проверить объекты внутри SAFE-префикса конкретного продукта из JSON-отчёта.",
     )
     actions.add_argument(
         "--search-s1",
@@ -56,6 +62,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Размер страницы OData (по умолчанию 100).",
     )
     parser.add_argument("--search-output", type=Path, help="Путь для JSON-отчёта поиска.")
+    parser.add_argument(
+        "--search-report",
+        type=Path,
+        help="JSON-отчёт OData для проверки или последующей загрузки выбранного продукта.",
+    )
+    parser.add_argument(
+        "--product-index",
+        type=int,
+        default=0,
+        help="Нулевой индекс продукта в JSON-отчёте (по умолчанию 0).",
+    )
+    parser.add_argument(
+        "--s3-max-keys",
+        type=int,
+        default=5,
+        help="Максимум объектов для проверки SAFE-префикса (по умолчанию 5).",
+    )
     return parser
 
 
@@ -84,7 +107,29 @@ def _prepare_region(
     }
 
 
-def _run_search(args: argparse.Namespace, settings: object) -> int:
+def _load_product_from_report(report_path: Path, product_index: int) -> dict[str, Any]:
+    if not report_path.is_file():
+        raise FileNotFoundError(f"Не найден JSON-отчёт поиска: {report_path}")
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Некорректный JSON-отчёт: {exc}") from exc
+
+    products = report.get("products")
+    if not isinstance(products, list) or not products:
+        raise ValueError("В JSON-отчёте нет массива products или он пуст.")
+    if product_index < 0 or product_index >= len(products):
+        raise ValueError(
+            f"product-index={product_index} вне диапазона 0–{len(products) - 1}."
+        )
+
+    product = products[product_index]
+    if not isinstance(product, dict) or not product.get("s3_path"):
+        raise ValueError(f"У продукта с индексом {product_index} отсутствует S3Path.")
+    return product
+
+
+def _run_search(args: argparse.Namespace, settings: Any) -> int:
     if not args.start_date or not args.end_date:
         raise ValueError("--search-s1 требует --start-date и --end-date.")
     start_date = date.fromisoformat(args.start_date).isoformat()
@@ -94,10 +139,9 @@ def _run_search(args: argparse.Namespace, settings: object) -> int:
 
     buffer_m = settings.buffer_m
     search_area_path = _region_output_path(settings.project_root, buffer_m)
-    source_path = settings.region_geojson
-
-    # Regenerate every time to avoid using a stale polygon after local edits.
-    region_report = _prepare_region(source_path, buffer_m, search_area_path)
+    region_report = _prepare_region(
+        settings.region_geojson, buffer_m, search_area_path
+    )
     logging.info(
         "Поисковая область подготовлена: %s; полигонов: %s",
         search_area_path,
@@ -171,12 +215,15 @@ def main() -> int:
 
     try:
         if args.check_s3:
-            client = CDSES3Client(settings)
-            result = client.check_access()
+            result = CDSES3Client(settings).check_access()
+            has_objects = result.visible_objects > 0
             print(
                 json.dumps(
                     {
-                        "status": "OK",
+                        "request_success": True,
+                        "status": "OK" if has_objects else "EMPTY_PREFIX",
+                        "credentials_and_list_request_accepted": True,
+                        "prefix_contains_objects": has_objects,
                         "endpoint": result.endpoint_url,
                         "bucket": result.bucket,
                         "checked_prefix": result.checked_prefix,
@@ -189,6 +236,37 @@ def main() -> int:
                 )
             )
             return 0
+
+        if args.check_s3_product:
+            if args.search_report is None:
+                raise ValueError("--check-s3-product требует --search-report.")
+            product = _load_product_from_report(
+                args.search_report, args.product_index
+            )
+            result = CDSES3Client(settings).check_product_prefix(
+                product["s3_path"], max_keys=args.s3_max_keys
+            )
+            has_objects = result.objects_returned > 0
+            print(
+                json.dumps(
+                    {
+                        "request_success": True,
+                        "status": "PRODUCT_FOUND" if has_objects else "PRODUCT_PREFIX_EMPTY",
+                        "product_name": product.get("name"),
+                        "product_id": product.get("product_id"),
+                        "endpoint": result.endpoint_url,
+                        "bucket": result.bucket,
+                        "product_prefix": result.product_prefix,
+                        "objects_returned": result.objects_returned,
+                        "is_truncated": result.is_truncated,
+                        "sample_objects": result.sample_objects,
+                        "downloaded_data": False,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0 if has_objects else 4
 
         if args.search_s1:
             return _run_search(args, settings)
