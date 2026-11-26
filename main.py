@@ -93,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--download-dir",
         type=Path,
-        help="Каталог для SAFE-продукта (по умолчанию S1_DOWNLOAD_DIR из .env).",
+        help="Корневой каталог для папок продуктов (по умолчанию S1_DOWNLOAD_DIR из .env).",
     )
     return parser
 
