@@ -104,6 +104,7 @@ def create_product_views(
     """Expose polarization TIFFs and quick-look beside an intact original SAFE."""
     safe_root = Path(safe_path).resolve()
     product_root = Path(product_dir).resolve()
+    product_root.mkdir(parents=True, exist_ok=True)
     if not safe_root.is_dir():
         raise FileNotFoundError(f"Не найдена папка исходного SAFE: {safe_root}")
     info = parse_product_name(product_name)
