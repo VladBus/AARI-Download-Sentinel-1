@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 _PRODUCT_NAME = re.compile(
-    r"^(?P<platform>S1[ABC-D])_(?P<mode>EW|IW)_GRDM_1S"
+    r"^(?P<platform>S1[ABCD])_(?P<mode>EW|IW)_GRDM_1S"
     r"(?P<polarization>DH|DV|SH|SV)_(?P<start>\d{8}T\d{6})_"
     r"(?P<end>\d{8}T\d{6})_\d+_(?P<datatake>[0-9A-Fa-f]{6})_"
     r"[0-9A-Fa-f]{4}\.SAFE$",
