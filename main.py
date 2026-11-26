@@ -281,6 +281,7 @@ def _run_product_download(args: argparse.Namespace, settings: Any) -> int:
                 "product_prefix": result.product_prefix,
                 "local_path": result.local_path,
                 "safe_path": result.safe_path,
+                "download_manifest": result.manifest_path,
                 "primary_files": product_views["primary_files"],
                 "objects_total": result.objects_total,
                 "objects_downloaded": result.objects_downloaded,
