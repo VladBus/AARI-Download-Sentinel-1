@@ -179,6 +179,37 @@ class S3ClientTests(unittest.TestCase):
             self.assertEqual(result.objects_skipped, 0)
             self.assertEqual(result.total_size_bytes, len(b"manifest-data") + len(b"xml-data"))
 
+
+    def test_download_with_folder_name_places_original_safe_in_source_directory(self) -> None:
+        prefix = "Sentinel-1/SAR/EW_GRDM_1S/2026/11/24/example.SAFE/"
+        fake_client = Mock()
+        fake_client.list_objects_v2.return_value = {
+            "Contents": [{"Key": prefix + "manifest.safe", "Size": 13}],
+            "IsTruncated": False,
+        }
+
+        def fake_download_file(bucket, key, filename, Config, Callback):
+            Path(filename).write_bytes(b"manifest-data")
+            Callback(13)
+
+        fake_client.download_file.side_effect = fake_download_file
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = CDSES3Client(
+                self._settings_with_credentials(), client=fake_client
+            ).download_product(
+                "/eodata/" + prefix.rstrip("/"),
+                "example.SAFE",
+                temp_dir,
+                folder_name="2026-11-24_030553-030653_EW_S1C_014EEB",
+            )
+            product_root = Path(temp_dir) / "2026-11-24_030553-030653_EW_S1C_014EEB"
+            self.assertEqual(
+                (product_root / "source.SAFE" / "manifest.safe").read_bytes(),
+                b"manifest-data",
+            )
+            self.assertEqual(result.local_path, str(product_root.resolve()))
+            self.assertEqual(result.safe_path, str((product_root / "source.SAFE").resolve()))
+
     def test_download_skips_files_already_present_with_matching_size(self) -> None:
         prefix = "Sentinel-1/SAR/EW_GRDM_1S/2026/11/24/example.SAFE/"
         file_payload = b"same-size"
