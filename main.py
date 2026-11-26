@@ -16,6 +16,7 @@ from catalogue.product_search import save_search_report, search_sentinel1
 from config import load_settings
 from downloader.s3_client import CDSES3Client, S3ConnectionError
 from downloader.product_layout import build_product_folder_name, create_product_views
+from storage import check_storage_directory
 from geometry.region_manager import build_search_area, save_search_area
 
 
@@ -53,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--search-s1",
         action="store_true",
         help="Найти продукты Sentinel-1 EW GRDM HH+HV через CDSE OData.",
+    )
+    actions.add_argument(
+        "--check-storage",
+        action="store_true",
+        help="Проверить создание каталога и доступ на запись, чтение и удаление.",
     )
 
     parser.add_argument("--geojson", type=Path, help="Путь к исходному GeoJSON.")
@@ -260,6 +266,7 @@ def _run_product_download(args: argparse.Namespace, settings: Any) -> int:
         raise ValueError("В выбранной записи JSON отсутствует имя продукта.")
 
     destination_dir = args.download_dir or settings.download_dir
+    storage_check = check_storage_directory(destination_dir)
     folder_name = build_product_folder_name(product_name)
     result = CDSES3Client(settings).download_product(
         s3_path=product["s3_path"],
@@ -279,6 +286,8 @@ def _run_product_download(args: argparse.Namespace, settings: Any) -> int:
                 "endpoint": result.endpoint_url,
                 "bucket": result.bucket,
                 "product_prefix": result.product_prefix,
+                "storage_root": storage_check.directory,
+                "storage_write_read_delete_verified": storage_check.write_read_delete_verified,
                 "local_path": result.local_path,
                 "safe_path": result.safe_path,
                 "download_manifest": result.manifest_path,
@@ -308,6 +317,25 @@ def main() -> int:
     settings = load_settings()
 
     try:
+        if args.check_storage:
+            destination_dir = args.download_dir or settings.download_dir
+            result = check_storage_directory(destination_dir)
+            print(
+                json.dumps(
+                    {
+                        "status": "STORAGE_READY",
+                        "storage_root": result.directory,
+                        "directory_created": result.created,
+                        "write_read_delete_verified": result.write_read_delete_verified,
+                        "probe_file_removed": result.probe_file_removed,
+                        "downloaded_data": False,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+
         if args.check_s3:
             result = CDSES3Client(settings).check_access()
             has_objects = result.visible_objects > 0
