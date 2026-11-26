@@ -15,6 +15,7 @@ import requests
 from catalogue.product_search import save_search_report, search_sentinel1
 from config import load_settings
 from downloader.s3_client import CDSES3Client, S3ConnectionError
+from downloader.product_layout import build_product_folder_name, create_product_views
 from geometry.region_manager import build_search_area, save_search_area
 
 
@@ -259,11 +260,14 @@ def _run_product_download(args: argparse.Namespace, settings: Any) -> int:
         raise ValueError("В выбранной записи JSON отсутствует имя продукта.")
 
     destination_dir = args.download_dir or settings.download_dir
+    folder_name = build_product_folder_name(product_name)
     result = CDSES3Client(settings).download_product(
         s3_path=product["s3_path"],
         product_name=product_name,
         destination_dir=destination_dir,
+        folder_name=folder_name,
     )
+    product_views = create_product_views(result.safe_path, result.local_path)
     print(
         json.dumps(
             {
@@ -274,6 +278,8 @@ def _run_product_download(args: argparse.Namespace, settings: Any) -> int:
                 "bucket": result.bucket,
                 "product_prefix": result.product_prefix,
                 "local_path": result.local_path,
+                "safe_path": result.safe_path,
+                "primary_files": product_views["primary_files"],
                 "objects_total": result.objects_total,
                 "objects_downloaded": result.objects_downloaded,
                 "objects_skipped": result.objects_skipped,
