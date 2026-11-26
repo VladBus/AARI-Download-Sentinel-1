@@ -241,6 +241,12 @@ class S3ClientTests(unittest.TestCase):
         self.assertEqual(result.objects_downloaded, 0)
         self.assertEqual(result.objects_skipped, 1)
         self.assertEqual(result.skipped_size_bytes, len(file_payload))
+        manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["status"], "completed")
+        self.assertEqual(
+            manifest["objects"][prefix + "manifest.safe"]["status"],
+            "skipped_existing",
+        )
 
     def test_download_manifest_records_completed_objects(self) -> None:
         prefix = "Sentinel-1/SAR/EW_GRDM_1S/2026/11/24/example.SAFE/"
@@ -372,6 +378,9 @@ class S3ClientTests(unittest.TestCase):
                     "example.SAFE",
                     temp_dir,
                 )
+            product_dir = Path(temp_dir) / "example.SAFE"
+            self.assertFalse((product_dir / "manifest.safe").exists())
+            self.assertFalse((product_dir / "manifest.safe.part").exists())
 
     def test_empty_product_prefix_raises_file_not_found(self) -> None:
         fake_client = Mock()
