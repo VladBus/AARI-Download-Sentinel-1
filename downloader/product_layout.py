@@ -72,8 +72,14 @@ def _sha256(path: Path) -> str:
 
 def _publish_alias(source: Path, destination: Path) -> str:
     if destination.exists():
-        if destination.is_file() and destination.stat().st_size == source.stat().st_size:
-            return "existing"
+        if destination.is_file():
+            try:
+                if os.path.samefile(source, destination):
+                    return "existing"
+            except OSError:
+                pass
+            if destination.stat().st_size == source.stat().st_size and _sha256(destination) == _sha256(source):
+                return "existing"
         raise FileExistsError(
             f"Целевой файл уже существует и не совпадает с источником: {destination}"
         )
@@ -126,17 +132,20 @@ def create_product_views(
         path for path in preview_dir.glob("*")
         if path.is_file() and path.name.lower() == "quick-look.png"
     ] if preview_dir.is_dir() else []
-    if len(quicklook_candidates) != 1:
-        raise FileNotFoundError("В SAFE не найден единственный preview/quick-look.png.")
-    quicklook_source = quicklook_candidates[0]
-    quicklook_target = product_root / "quick-look.png"
-    if quicklook_target.exists():
-        if _sha256(quicklook_target) != _sha256(quicklook_source):
-            raise FileExistsError(f"Quick-look уже существует и отличается: {quicklook_target}")
-        aliases["quick-look.png"] = "existing"
+    if len(quicklook_candidates) > 1:
+        raise ValueError("В SAFE найдено несколько файлов quick-look.png.")
+    if quicklook_candidates:
+        quicklook_source = quicklook_candidates[0]
+        quicklook_target = product_root / "quick-look.png"
+        if quicklook_target.exists():
+            if _sha256(quicklook_target) != _sha256(quicklook_source):
+                raise FileExistsError(f"Quick-look уже существует и отличается: {quicklook_target}")
+            aliases["quick-look.png"] = "existing"
+        else:
+            shutil.copy2(quicklook_source, quicklook_target)
+            aliases["quick-look.png"] = "copy"
     else:
-        shutil.copy2(quicklook_source, quicklook_target)
-        aliases["quick-look.png"] = "copy"
+        aliases["quick-look.png"] = "missing"
 
     metadata = {
         "schema": "aari_sentinel1_product_v1",
