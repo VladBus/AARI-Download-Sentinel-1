@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -240,6 +241,92 @@ class S3ClientTests(unittest.TestCase):
         self.assertEqual(result.objects_downloaded, 0)
         self.assertEqual(result.objects_skipped, 1)
         self.assertEqual(result.skipped_size_bytes, len(file_payload))
+
+    def test_download_manifest_records_completed_objects(self) -> None:
+        prefix = "Sentinel-1/SAR/EW_GRDM_1S/2026/11/24/example.SAFE/"
+        payload = b"manifest-data"
+        fake_client = Mock()
+        fake_client.list_objects_v2.return_value = {
+            "Contents": [{"Key": prefix + "manifest.safe", "Size": len(payload)}],
+            "IsTruncated": False,
+        }
+
+        def fake_download_file(bucket, key, filename, Config, Callback):
+            self.assertTrue(filename.endswith(".part"))
+            Path(filename).write_bytes(payload)
+            Callback(len(payload))
+
+        fake_client.download_file.side_effect = fake_download_file
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = CDSES3Client(
+                self._settings_with_credentials(), client=fake_client
+            ).download_product(
+                "/eodata/" + prefix.rstrip("/"),
+                "example.SAFE",
+                temp_dir,
+                folder_name="example_product",
+            )
+            manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+            safe_root = Path(result.safe_path)
+            self.assertEqual(manifest["status"], "completed")
+            self.assertEqual(manifest["objects_total"], 1)
+            self.assertEqual(
+                manifest["objects"][prefix + "manifest.safe"]["status"],
+                "downloaded",
+            )
+            self.assertEqual(
+                manifest["objects"][prefix + "manifest.safe"]["verification"],
+                "size_match",
+            )
+            self.assertEqual(
+                (safe_root / "manifest.safe").read_bytes(),
+                payload,
+            )
+            self.assertFalse((safe_root / "manifest.safe.part").exists())
+            self.assertEqual(result.manifest_path, str(Path(temp_dir) / "example_product" / "download_manifest.json"))
+
+    def test_failed_transfer_removes_partial_file_and_records_failure(self) -> None:
+        prefix = "Sentinel-1/SAR/EW_GRDM_1S/2026/11/24/example.SAFE/"
+        fake_client = Mock()
+        fake_client.list_objects_v2.return_value = {
+            "Contents": [{"Key": prefix + "manifest.safe", "Size": 20}],
+            "IsTruncated": False,
+        }
+
+        def fake_download_file(bucket, key, filename, Config, Callback):
+            Path(filename).write_bytes(b"partial")
+            Callback(7)
+            raise RuntimeError("simulated connection interruption")
+
+        fake_client.download_file.side_effect = fake_download_file
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = CDSES3Client(
+                self._settings_with_credentials(), client=fake_client
+            )
+            with self.assertRaises(S3ConnectionError):
+                client.download_product(
+                    "/eodata/" + prefix.rstrip("/"),
+                    "example.SAFE",
+                    temp_dir,
+                    folder_name="example_product",
+                )
+
+            product_root = Path(temp_dir) / "example_product"
+            safe_root = product_root / "source.SAFE"
+            manifest = json.loads(
+                (product_root / "download_manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertFalse((safe_root / "manifest.safe").exists())
+            self.assertFalse((safe_root / "manifest.safe.part").exists())
+            self.assertEqual(manifest["status"], "incomplete")
+            self.assertEqual(
+                manifest["objects"][prefix + "manifest.safe"]["status"],
+                "failed",
+            )
+            self.assertIn(
+                "simulated connection interruption",
+                manifest["objects"][prefix + "manifest.safe"]["error"],
+            )
 
     def test_download_rejects_path_traversal_before_writing(self) -> None:
         prefix = "Sentinel-1/SAR/EW_GRDM_1S/2026/11/24/example.SAFE/"
