@@ -129,7 +129,7 @@ python main.py --download-product --search-report "data\search_results\sentinel1
 По умолчанию продукт сохраняется в:
 
 ~~~text
-data\downloads\<ИМЯ_ПРОДУКТА>.SAFE\
+data\downloads\YYYY-MM-DD_HHMMSS-HHMMSS_EW_S1C_DATATAKE\
 ~~~
 
 Можно указать другой локальный каталог:
