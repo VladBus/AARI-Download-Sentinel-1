@@ -50,7 +50,7 @@ class ProductLayoutTests(unittest.TestCase):
             (measurement / "s1c-ew-grd-hv-test.tiff").write_bytes(b"hv-data")
             (preview / "quick-look.png").write_bytes(b"png-data")
 
-            result = create_product_views(safe, product_dir)
+            result = create_product_views(safe, product_dir, PRODUCT)
 
             self.assertEqual((product_dir / "HH.tiff").read_bytes(), b"hh-data")
             self.assertEqual((product_dir / "HV.tiff").read_bytes(), b"hv-data")
@@ -69,7 +69,7 @@ class ProductLayoutTests(unittest.TestCase):
             (safe / "measurement" / "image-hh-test.tiff").write_bytes(b"hh")
             (safe / "preview" / "quick-look.png").write_bytes(b"png")
             with self.assertRaisesRegex(ValueError, "HV"):
-                create_product_views(safe, root / "product")
+                create_product_views(safe, root / "product", PRODUCT)
 
 
 if __name__ == "__main__":
