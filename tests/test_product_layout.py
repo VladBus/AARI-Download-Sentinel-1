@@ -60,6 +60,22 @@ class ProductLayoutTests(unittest.TestCase):
             self.assertEqual(result["folder_name"], product_dir.name)
             self.assertEqual(metadata["primary_files"]["HH.tiff"], "hardlink")
 
+
+    def test_quicklook_is_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            product_dir = root / "product"
+            safe = product_dir / "source.SAFE"
+            measurement = safe / "measurement"
+            measurement.mkdir(parents=True)
+            (measurement / "s1c-ew-grd-hh-test.tiff").write_bytes(b"hh-data")
+            (measurement / "s1c-ew-grd-hv-test.tiff").write_bytes(b"hv-data")
+
+            result = create_product_views(safe, product_dir, PRODUCT)
+
+            self.assertEqual(result["primary_files"]["quick-look.png"], "missing")
+            self.assertFalse((product_dir / "quick-look.png").exists())
+
     def test_requires_exactly_one_file_per_polarization(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
