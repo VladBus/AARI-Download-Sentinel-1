@@ -24,6 +24,16 @@ class ConfigTests(unittest.TestCase):
             (Path(temp_dir) / "data" / "geometry" / "SMP.geojson").resolve(),
         )
 
+
+    def test_download_dir_can_be_overridden_with_absolute_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            download_dir = Path(temp_dir) / "sentinel1-storage"
+            with patch.dict(
+                os.environ, {"S1_DOWNLOAD_DIR": str(download_dir)}, clear=True
+            ):
+                settings = load_settings(temp_dir)
+        self.assertEqual(settings.download_dir, download_dir.resolve())
+
     def test_s3_credentials_are_required_only_when_requested(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.dict(os.environ, {}, clear=True):
