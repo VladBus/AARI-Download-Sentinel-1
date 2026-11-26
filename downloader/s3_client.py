@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
+import os
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
@@ -69,6 +72,7 @@ class S3ProductDownloadResult:
     total_size_bytes: int
     downloaded_size_bytes: int
     skipped_size_bytes: int
+    manifest_path: str
 
 
 @dataclass(frozen=True)
@@ -180,6 +184,16 @@ class CDSES3Client:
             ],
         )
 
+    def _write_download_manifest(self, path: Path, manifest: dict[str, Any]) -> None:
+        """Atomically persist the current state of a product download."""
+        temporary_path = path.with_name(path.name + ".tmp")
+        manifest["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+        temporary_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary_path, path)
+
     def download_product(
         self,
         s3_path: str,
@@ -187,10 +201,12 @@ class CDSES3Client:
         destination_dir: str | Path,
         folder_name: str | None = None,
     ) -> S3ProductDownloadResult:
-        """Download all objects in one SAFE prefix, resuming at completed-file level.
+        """Download one SAFE product using atomic per-file publication.
 
-        Existing files are skipped only when their local size matches the S3 object size.
-        A file interrupted during transfer is downloaded again on the next run.
+        Objects are first downloaded to a .part file. The final filename is only
+        published after the transfer completes and its byte size matches S3.
+        A JSON manifest is atomically updated after every object so interrupted
+        downloads can be audited and safely resumed.
         """
         self._validate_product_name(product_name)
         product_prefix = self._product_prefix(s3_path)
@@ -211,7 +227,7 @@ class CDSES3Client:
         for item in objects:
             relative_path = self._safe_relative_path(item.key, product_prefix)
             local_path = (safe_root / relative_path).resolve()
-            if not local_path.is_relative_to(safe_root):
+            if not local_path.is_relative_to(safe_root.resolve()):
                 raise ValueError(
                     f"Недопустимый путь объекта S3: {item.key!r}."
                 )
@@ -219,15 +235,42 @@ class CDSES3Client:
 
         product_root.mkdir(parents=True, exist_ok=True)
         safe_root.mkdir(parents=True, exist_ok=True)
+        manifest_path = (
+            product_root / "download_manifest.json"
+            if folder_name
+            else output_root / f"{product_name}.download_manifest.json"
+        )
         total_size = sum(item.size_bytes for item in objects)
         downloaded_count = 0
         skipped_count = 0
         downloaded_size = 0
         skipped_size = 0
+        object_states: dict[str, dict[str, Any]] = {
+            item.key: {
+                "relative_path": local_path.relative_to(safe_root).as_posix(),
+                "size_bytes": item.size_bytes,
+                "status": "pending",
+                "verification": None,
+            }
+            for item, local_path in planned_files
+        }
+        manifest: dict[str, Any] = {
+            "schema": "aari_sentinel1_download_v1",
+            "product_name": product_name,
+            "bucket": self.bucket_name,
+            "product_prefix": product_prefix,
+            "status": "in_progress",
+            "objects_total": len(objects),
+            "total_size_bytes": total_size,
+            "objects": object_states,
+        }
+        self._write_download_manifest(manifest_path, manifest)
+
         transfer_config = TransferConfig(
             multipart_threshold=64 * 1024 * 1024,
             multipart_chunksize=64 * 1024 * 1024,
             max_concurrency=4,
+            num_download_attempts=5,
             use_threads=True,
         )
 
@@ -239,10 +282,14 @@ class CDSES3Client:
             dynamic_ncols=True,
         ) as progress:
             for item, local_path in planned_files:
+                state = object_states[item.key]
                 if local_path.is_file() and local_path.stat().st_size == item.size_bytes:
                     skipped_count += 1
                     skipped_size += item.size_bytes
+                    state["status"] = "skipped_existing"
+                    state["verification"] = "size_match"
                     progress.update(item.size_bytes)
+                    self._write_download_manifest(manifest_path, manifest)
                     continue
 
                 if local_path.exists() and not local_path.is_file():
@@ -251,33 +298,54 @@ class CDSES3Client:
                     )
 
                 local_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary_path = local_path.with_name(local_path.name + ".part")
+                if temporary_path.is_dir():
+                    raise S3ConnectionError(
+                        f"Временный путь загрузки занят каталогом: {temporary_path}"
+                    )
+                temporary_path.unlink(missing_ok=True)
+
                 try:
                     self.client.download_file(
                         self.bucket_name,
                         item.key,
-                        str(local_path),
+                        str(temporary_path),
                         Config=transfer_config,
                         Callback=progress.update,
                     )
+                    if not temporary_path.is_file():
+                        raise S3ConnectionError(
+                            f"После загрузки временный файл не найден: {temporary_path}"
+                        )
+                    actual_size = temporary_path.stat().st_size
+                    if actual_size != item.size_bytes:
+                        raise S3ConnectionError(
+                            "Размер скачанного объекта не совпадает с размером в S3: "
+                            f"{item.key}; ожидалось {item.size_bytes} байт, "
+                            f"получено {actual_size} байт."
+                        )
+                    os.replace(temporary_path, local_path)
                 except Exception as exc:
+                    temporary_path.unlink(missing_ok=True)
+                    state["status"] = "failed"
+                    state["verification"] = None
+                    state["error"] = str(exc)
+                    manifest["status"] = "incomplete"
+                    self._write_download_manifest(manifest_path, manifest)
+                    if isinstance(exc, S3ConnectionError):
+                        raise
                     raise S3ConnectionError(
                         f"Не удалось скачать объект {item.key}: {exc}"
                     ) from exc
 
-                if not local_path.is_file():
-                    raise S3ConnectionError(
-                        f"После загрузки файл не найден: {local_path}"
-                    )
-                actual_size = local_path.stat().st_size
-                if actual_size != item.size_bytes:
-                    raise S3ConnectionError(
-                        "Размер скачанного объекта не совпадает с размером в S3: "
-                        f"{item.key}; ожидалось {item.size_bytes} байт, "
-                        f"получено {actual_size} байт."
-                    )
-
                 downloaded_count += 1
                 downloaded_size += item.size_bytes
+                state["status"] = "downloaded"
+                state["verification"] = "size_match"
+                self._write_download_manifest(manifest_path, manifest)
+
+        manifest["status"] = "completed"
+        self._write_download_manifest(manifest_path, manifest)
 
         return S3ProductDownloadResult(
             endpoint_url=self.endpoint_url,
@@ -292,6 +360,7 @@ class CDSES3Client:
             total_size_bytes=total_size,
             downloaded_size_bytes=downloaded_size,
             skipped_size_bytes=skipped_size,
+            manifest_path=str(manifest_path),
         )
 
     def _list_product_objects(self, product_prefix: str) -> list[_S3Object]:
