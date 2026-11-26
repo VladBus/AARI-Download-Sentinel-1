@@ -90,13 +90,17 @@ def _publish_alias(source: Path, destination: Path) -> str:
         return "copy"
 
 
-def create_product_views(safe_path: str | Path, product_dir: str | Path) -> dict[str, object]:
+def create_product_views(
+    safe_path: str | Path,
+    product_dir: str | Path,
+    product_name: str,
+) -> dict[str, object]:
     """Expose polarization TIFFs and quick-look beside an intact original SAFE."""
     safe_root = Path(safe_path).resolve()
     product_root = Path(product_dir).resolve()
     if not safe_root.is_dir():
         raise FileNotFoundError(f"Не найдена папка исходного SAFE: {safe_root}")
-    info = parse_product_name(safe_root.name)
+    info = parse_product_name(product_name)
     measurement = safe_root / "measurement"
     if not measurement.is_dir():
         raise FileNotFoundError(f"В SAFE отсутствует каталог measurement: {measurement}")
@@ -136,7 +140,7 @@ def create_product_views(safe_path: str | Path, product_dir: str | Path) -> dict
 
     metadata = {
         "schema": "aari_sentinel1_product_v1",
-        "product_name": safe_root.name,
+        "product_name": product_name,
         "folder_name": product_root.name,
         **info,
         "source_safe": "source.SAFE",
