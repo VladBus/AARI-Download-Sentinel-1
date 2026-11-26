@@ -62,6 +62,7 @@ class S3ProductDownloadResult:
     product_prefix: str
     product_name: str
     local_path: str
+    safe_path: str
     objects_total: int
     objects_downloaded: int
     objects_skipped: int
@@ -184,6 +185,7 @@ class CDSES3Client:
         s3_path: str,
         product_name: str,
         destination_dir: str | Path,
+        folder_name: str | None = None,
     ) -> S3ProductDownloadResult:
         """Download all objects in one SAFE prefix, resuming at completed-file level.
 
@@ -199,20 +201,24 @@ class CDSES3Client:
             )
 
         output_root = Path(destination_dir).expanduser().resolve()
-        product_root = (output_root / product_name).resolve()
+        local_folder_name = folder_name or product_name
+        self._validate_local_folder_name(local_folder_name)
+        product_root = (output_root / local_folder_name).resolve()
+        safe_root = product_root / "source.SAFE" if folder_name else product_root
         planned_files: list[tuple[_S3Object, Path]] = []
 
         # Validate every object key before creating or writing any local files.
         for item in objects:
             relative_path = self._safe_relative_path(item.key, product_prefix)
-            local_path = (product_root / relative_path).resolve()
-            if not local_path.is_relative_to(product_root):
+            local_path = (safe_root / relative_path).resolve()
+            if not local_path.is_relative_to(safe_root):
                 raise ValueError(
                     f"Недопустимый путь объекта S3: {item.key!r}."
                 )
             planned_files.append((item, local_path))
 
         product_root.mkdir(parents=True, exist_ok=True)
+        safe_root.mkdir(parents=True, exist_ok=True)
         total_size = sum(item.size_bytes for item in objects)
         downloaded_count = 0
         skipped_count = 0
@@ -279,6 +285,7 @@ class CDSES3Client:
             product_prefix=product_prefix,
             product_name=product_name,
             local_path=str(product_root),
+            safe_path=str(safe_root),
             objects_total=len(objects),
             objects_downloaded=downloaded_count,
             objects_skipped=skipped_count,
@@ -363,6 +370,20 @@ class CDSES3Client:
                 f"Недопустимое имя SAFE-продукта для локального каталога: "
                 f"{product_name!r}."
             )
+
+    @staticmethod
+    def _validate_local_folder_name(folder_name: str) -> None:
+        invalid_characters = '<>:"|?*'
+        if (
+            not folder_name
+            or folder_name in {".", ".."}
+            or folder_name != PurePosixPath(folder_name).name
+            or "/" in folder_name
+            or "\\" in folder_name
+            or any(char in folder_name for char in invalid_characters)
+            or folder_name.endswith((" ", "."))
+        ):
+            raise ValueError(f"Недопустимое имя локальной папки продукта: {folder_name!r}.")
 
     @staticmethod
     def _safe_relative_path(key: str, prefix: str) -> Path:
