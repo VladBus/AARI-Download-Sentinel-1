@@ -241,7 +241,9 @@ class S3ClientTests(unittest.TestCase):
         self.assertEqual(result.objects_downloaded, 0)
         self.assertEqual(result.objects_skipped, 1)
         self.assertEqual(result.skipped_size_bytes, len(file_payload))
-        manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+        expected_manifest = Path(temp_dir) / "example.SAFE.download_manifest.json"
+        self.assertEqual(Path(result.manifest_path), expected_manifest)
+        manifest = json.loads(expected_manifest.read_text(encoding="utf-8"))
         self.assertEqual(manifest["status"], "completed")
         self.assertEqual(
             manifest["objects"][prefix + "manifest.safe"]["status"],
