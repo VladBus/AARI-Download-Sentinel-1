@@ -171,7 +171,7 @@ data\downloads\
     ├── quick-look.png
     ├── product.json
     ├── download_manifest.json
-    └── source.SAFE\\
+    └── source.SAFE\
         ├── manifest.safe
         ├── annotation\
         ├── measurement\
