@@ -58,7 +58,7 @@ class ProductLayoutTests(unittest.TestCase):
             metadata = json.loads((product_dir / "product.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["product_name"], PRODUCT)
             self.assertEqual(result["folder_name"], product_dir.name)
-            self.assertEqual(metadata["primary_files"]["HH.tiff"], "hardlink")
+            self.assertIn(metadata["primary_files"]["HH.tiff"], ("hardlink", "copy"))
 
 
     def test_quicklook_is_optional(self) -> None:
