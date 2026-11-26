@@ -189,7 +189,7 @@ class CDSES3Client:
         temporary_path = path.with_name(path.name + ".tmp")
         manifest["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
         temporary_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\\n",
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         os.replace(temporary_path, path)
