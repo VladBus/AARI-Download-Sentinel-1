@@ -267,7 +267,9 @@ def _run_product_download(args: argparse.Namespace, settings: Any) -> int:
         destination_dir=destination_dir,
         folder_name=folder_name,
     )
-    product_views = create_product_views(result.safe_path, result.local_path)
+    product_views = create_product_views(
+        result.safe_path, result.local_path, product_name
+    )
     print(
         json.dumps(
             {
