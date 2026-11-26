@@ -237,18 +237,18 @@ class S3ClientTests(unittest.TestCase):
                 temp_dir,
             )
 
-        fake_client.download_file.assert_not_called()
-        self.assertEqual(result.objects_downloaded, 0)
-        self.assertEqual(result.objects_skipped, 1)
-        self.assertEqual(result.skipped_size_bytes, len(file_payload))
-        expected_manifest = Path(temp_dir) / "example.SAFE.download_manifest.json"
-        self.assertEqual(Path(result.manifest_path), expected_manifest)
-        manifest = json.loads(expected_manifest.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["status"], "completed")
-        self.assertEqual(
-            manifest["objects"][prefix + "manifest.safe"]["status"],
-            "skipped_existing",
-        )
+            fake_client.download_file.assert_not_called()
+            self.assertEqual(result.objects_downloaded, 0)
+            self.assertEqual(result.objects_skipped, 1)
+            self.assertEqual(result.skipped_size_bytes, len(file_payload))
+            expected_manifest = Path(temp_dir) / "example.SAFE.download_manifest.json"
+            self.assertEqual(Path(result.manifest_path), expected_manifest)
+            manifest = json.loads(expected_manifest.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "completed")
+            self.assertEqual(
+                manifest["objects"][prefix + "manifest.safe"]["status"],
+                "skipped_existing",
+            )
 
     def test_download_manifest_records_completed_objects(self) -> None:
         prefix = "Sentinel-1/SAR/EW_GRDM_1S/2026/11/24/example.SAFE/"
