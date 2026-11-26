@@ -135,7 +135,7 @@ python main.py --check-storage
 Команда использует `S1_DOWNLOAD_DIR` из локального `.env`. Для проверки другого каталога:
 
 ~~~powershell
-python main.py --check-storage --download-dir "D:\\Sentinel-1"
+python main.py --check-storage --download-dir "D:\Sentinel-1"
 ~~~
 
 Проверка создаёт каталог при необходимости, записывает и читает временный файл, затем удаляет его. Существующие файлы не изменяются. Команда не обращается к CDSE и не скачивает данные. Перед каждой фактической загрузкой та же проверка выполняется автоматически.
@@ -143,8 +143,8 @@ python main.py --check-storage --download-dir "D:\\Sentinel-1"
 Корневой каталог можно переключать без изменения кода:
 
 - локально: `S1_DOWNLOAD_DIR=data/downloads`;
-- другой локальный диск: `S1_DOWNLOAD_DIR=D:\\Sentinel-1`;
-- сетевой ресурс Windows: `S1_DOWNLOAD_DIR=\\\\10.31.34.60\\Tiris\\Sentinel-1`.
+- другой локальный диск: `S1_DOWNLOAD_DIR=D:\Sentinel-1`;
+- сетевой ресурс Windows: `S1_DOWNLOAD_DIR=\\10.31.34.60\Tiris\Sentinel-1`.
 
 Для текущего этапа оставьте локальный путь. Сетевой путь будет установлен после подтверждения выделенного каталога и проверки прав доступа.
 
